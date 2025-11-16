@@ -1,0 +1,148 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <SensirionI2cScd4x.h>
+
+// Forward declarations
+void logError(const char* where, uint16_t err);
+
+// CO2 Sensor configuration  
+#define SCD4X_I2C_ADDR 0x62
+#define I2C_SDA 8
+#define I2C_SCL 9
+#define I2C_FREQ 100000
+
+// Sensor
+SensirionI2cScd4x scd4x;
+
+// Sensor data
+uint16_t co2 = 0;
+float temperature = 0.0;
+float humidity = 0.0;
+unsigned long lastUpdate = 0;
+const unsigned long UPDATE_INTERVAL = 5000; // 5 seconds
+bool sensorReady = false;
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  Serial.println("\n=== Waveshare ESP32-S3 CO2 Monitor ===");
+  Serial.println("Board: ESP32-S3-Touch-LCD-4.3B");
+  Serial.println("Sensor: SCD40/SCD41");
+  
+  // Initialize I2C for sensor
+  Serial.println("\nInitializing I2C...");
+  Serial.printf("  SDA: GPIO%d\n", I2C_SDA);
+  Serial.printf("  SCL: GPIO%d\n", I2C_SCL);
+  Serial.printf("  Freq: %d Hz\n", I2C_FREQ);
+  
+  Wire.begin(I2C_SDA, I2C_SCL);
+  Wire.setClock(I2C_FREQ);
+
+  // Initialize CO2 sensor
+  Serial.println("\nInitializing SCD4x sensor...");
+  scd4x.begin(Wire, SCD4X_I2C_ADDR);
+
+  // Stop potentially previously started measurement
+  Serial.println("Stopping any previous measurement...");
+  uint16_t error = scd4x.stopPeriodicMeasurement();
+  if (error) {
+    logError("stopPeriodicMeasurement", error);
+  }
+  delay(500);
+
+  // Start periodic measurement
+  Serial.println("Starting periodic measurement...");
+  error = scd4x.startPeriodicMeasurement();
+  if (error) {
+    logError("startPeriodicMeasurement", error);
+    Serial.println("\n*** SENSOR ERROR ***");
+    Serial.println("Check connections:");
+    Serial.println("  SDA -> GPIO8");
+    Serial.println("  SCL -> GPIO9");
+    Serial.println("  VCC -> 3.3V");
+    Serial.println("  GND -> GND");
+    Serial.println("********************");
+  } else {
+    Serial.println("Sensor started successfully!");
+    Serial.println("Waiting for first reading (~5 seconds)...\n");
+    sensorReady = true;
+  }
+}
+
+void loop() {
+  if (!sensorReady) {
+    delay(1000);
+    return;
+  }
+
+  unsigned long now = millis();
+  
+  if (now - lastUpdate >= UPDATE_INTERVAL) {
+    lastUpdate = now;
+
+    // Check if data is ready
+    bool dataReady = false;
+    uint16_t error = scd4x.getDataReadyStatus(dataReady);
+    
+    if (error) {
+      logError("getDataReadyStatus", error);
+      return;
+    }
+
+    if (!dataReady) {
+      Serial.println("Data not ready yet (sensor warming up)...");
+      return;
+    }
+
+    // Read measurement
+    error = scd4x.readMeasurement(co2, temperature, humidity);
+    
+    if (error) {
+      logError("readMeasurement", error);
+      return;
+    }
+
+    // Validate data
+    if (co2 == 0) {
+      Serial.println("Invalid sample (sensor warming up)...");
+      return;
+    }
+
+    // Determine air quality
+    const char* airQuality;
+    if (co2 < 800) {
+      airQuality = "EXCELLENT";
+    } else if (co2 < 1000) {
+      airQuality = "GOOD";
+    } else if (co2 < 1500) {
+      airQuality = "FAIR";
+    } else if (co2 < 2000) {
+      airQuality = "POOR";
+    } else {
+      airQuality = "BAD";
+    }
+
+    // Print formatted output
+    Serial.println("======================================");
+    Serial.printf("  CO2:         %d ppm (%s)\n", co2, airQuality);
+    Serial.printf("  Temperature: %.2f °C\n", temperature);
+    Serial.printf("  Humidity:    %.2f %%\n", humidity);
+    Serial.printf("  Uptime:      %lu seconds\n", millis() / 1000);
+    Serial.println("======================================\n");
+
+    // Also output as JSON for easy parsing
+    Serial.printf("{\"co2_ppm\":%d,\"temp_c\":%.2f,\"humidity_pct\":%.2f,\"quality\":\"%s\",\"uptime_s\":%lu}\n",
+                  co2, temperature, humidity, airQuality, millis() / 1000);
+  }
+
+  delay(100);
+}
+
+void logError(const char* where, uint16_t err) {
+  char errMsg[256];
+  errorToString(err, errMsg, sizeof(errMsg));
+  Serial.printf("\n*** ERROR in %s ***\n", where);
+  Serial.printf("Code: 0x%04X\n", err);
+  Serial.printf("Message: %s\n", errMsg);
+  Serial.println("*******************\n");
+}
