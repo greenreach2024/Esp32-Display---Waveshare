@@ -488,6 +488,15 @@ public:
     );
 
     /**
+     * @brief Enable or disable internal frame buffer allocation
+     *
+     * @param[in] no_fb When true, skip allocating frame buffers and rely on bounce buffers during transfers
+     *
+     * @return `true` if configuration succeeds, `false` otherwise
+     */
+    bool configRGB_NoFrameBuffer(bool no_fb);
+
+    /**
      * @brief Initialize the bus
      *
      * @return `true` if initialization succeeds, `false` otherwise

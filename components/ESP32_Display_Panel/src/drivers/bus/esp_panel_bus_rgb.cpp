@@ -525,6 +525,28 @@ bool BusRGB::configRGB_BounceBufferSize(uint32_t size_in_pixel)
     return true;
 }
 
+bool BusRGB::configRGB_NoFrameBuffer(bool no_fb)
+{
+    ESP_UTILS_LOG_TRACE_ENTER_WITH_THIS();
+
+    ESP_UTILS_CHECK_FALSE_RETURN(!isOverState(State::INIT), false, "Should be called before `init()`");
+
+    ESP_UTILS_LOGD("Param: no_fb(%d)", static_cast<int>(no_fb));
+    auto &config = getRefreshPanelFullConfig();
+    config.flags.no_fb = no_fb;
+    if (no_fb) {
+        config.num_fbs = 0;
+        config.flags.fb_in_psram = 0;
+        config.flags.double_fb = 0;
+    } else if (config.num_fbs == 0) {
+        config.num_fbs = 1;
+    }
+
+    ESP_UTILS_LOG_TRACE_EXIT_WITH_THIS();
+
+    return true;
+}
+
 bool BusRGB::configRGB_TimingFlags(
     bool hsync_idle_low, bool vsync_idle_low, bool de_idle_high, bool pclk_active_neg, bool pclk_idle_high
 )

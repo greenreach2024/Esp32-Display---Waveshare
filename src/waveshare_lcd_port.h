@@ -45,7 +45,8 @@
 #define EXAMPLE_LCD_RGB_TIMING_DE_IDLE_HIGH      (0)
 #define EXAMPLE_LCD_RGB_TIMING_PCLK_ACTIVE_NEG   (1)
 #define EXAMPLE_LCD_RGB_TIMING_PCLK_IDLE_HIGH    (0)
-#define EXAMPLE_LCD_RGB_BOUNCE_BUFFER_SIZE  (EXAMPLE_LCD_WIDTH * 10)
+#define EXAMPLE_LCD_RGB_BOUNCE_BUFFER_SIZE  (EXAMPLE_LCD_WIDTH * 4)
+#define EXAMPLE_LCD_RGB_DISABLE_FRAMEBUFFER      (0)
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////// Please update the following configuration according to your board spec ////////////////////////////
@@ -100,5 +101,7 @@
 
 esp_err_t waveshare_lcd_init(); // Function to initialize LCD
 esp_err_t waveshare_lcd_pin_test(); // Cycle through known pin maps and render diagnostic stripes
+esp_err_t waveshare_lcd_draw_digit(int digit); // Render a large digit for visual diagnostics
+esp_err_t waveshare_lcd_draw_environment_dashboard(float temperature_c, float humidity_percent, int co2_ppm);
 
 #endif // End of IO_PORT_H
