@@ -403,28 +403,11 @@ static std::string format_int_value(int value)
     return std::string(buffer);
 }
 
-static void draw_background_grid(
-    std::vector<uint16_t> &frame, int screen_width, int screen_height,
-    uint16_t background_color, uint16_t grid_color)
-{
-    fill_rect(frame, screen_width, screen_height, 0, 0, screen_width, screen_height, background_color);
-
-    constexpr int grid_step = 32;
-    for (int y = 0; y < screen_height; y += grid_step) {
-        fill_rect(frame, screen_width, screen_height, 0, y, screen_width, 1, grid_color);
-    }
-
-    for (int x = 0; x < screen_width; x += grid_step) {
-        fill_rect(frame, screen_width, screen_height, x, 0, 1, screen_height, grid_color);
-    }
-}
-
 static void draw_metric_card(
     std::vector<uint16_t> &frame, int screen_width, int screen_height,
     const Rect &card, const MetricCardData &metric,
     uint16_t card_background, uint16_t primary_text_color, uint16_t secondary_text_color)
 {
-    // Card body and accent strip
     fill_rect(frame, screen_width, screen_height, card.x, card.y, card.w, card.h, card_background);
     fill_rect(frame, screen_width, screen_height, card.x, card.y, card.w, 6, metric.accent_color);
     fill_rect(frame, screen_width, screen_height, card.x, card.y + card.h - 6, card.w, 6, metric.accent_color);
@@ -448,6 +431,40 @@ static void draw_metric_card(
     const int unit_y = card.y + card.h - (unit_scale * 7) - padding;
     draw_text(frame, screen_width, screen_height, unit_x, unit_y, metric.unit, metric.accent_color, unit_scale);
 }
+
+static std::array<uint8_t, 3> rgb565_to_rgb888(uint16_t color)
+{
+    const uint8_t r = static_cast<uint8_t>(((color >> 11) & 0x1F) * 255 / 31);
+    const uint8_t g = static_cast<uint8_t>(((color >> 5) & 0x3F) * 255 / 63);
+    const uint8_t b = static_cast<uint8_t>((color & 0x1F) * 255 / 31);
+    return {r, g, b};
+}
+
+static uint16_t lerp_rgb565(uint16_t from, uint16_t to, float t)
+{
+    t = std::clamp(t, 0.0f, 1.0f);
+    const auto a = rgb565_to_rgb888(from);
+    const auto b = rgb565_to_rgb888(to);
+    const uint8_t r = static_cast<uint8_t>(a[0] + (b[0] - a[0]) * t);
+    const uint8_t g = static_cast<uint8_t>(a[1] + (b[1] - a[1]) * t);
+    const uint8_t bl = static_cast<uint8_t>(a[2] + (b[2] - a[2]) * t);
+    return to_rgb565(r, g, bl);
+}
+
+static void draw_vertical_gradient(
+    std::vector<uint16_t> &frame, int screen_width, int screen_height,
+    uint16_t top_color, uint16_t bottom_color)
+{
+    if (screen_height <= 0) {
+        return;
+    }
+    for (int y = 0; y < screen_height; ++y) {
+        const float ratio = static_cast<float>(y) / static_cast<float>(std::max(1, screen_height - 1));
+        const uint16_t row_color = lerp_rgb565(top_color, bottom_color, ratio);
+        fill_rect(frame, screen_width, screen_height, 0, y, screen_width, 1, row_color);
+    }
+}
+
 
 static bool draw_digit_two_pattern(LCD *lcd)
 {
@@ -909,45 +926,57 @@ esp_err_t waveshare_lcd_draw_environment_dashboard(float temperature_c, float hu
     );
 
     std::vector<uint16_t> frame(static_cast<size_t>(width) * height, 0);
-    const uint16_t background = to_rgb565(0x08, 0x15, 0x24);
-    const uint16_t grid = to_rgb565(0x10, 0x24, 0x36);
-    const uint16_t card_background = to_rgb565(0x12, 0x24, 0x38);
-    const uint16_t text_primary = to_rgb565(0xF0, 0xF6, 0xFF);
-    const uint16_t text_secondary = to_rgb565(0xA0, 0xC0, 0xD8);
+    const uint16_t gradient_top = to_rgb565(0x1A, 0x1A, 0x2E);
+    const uint16_t gradient_bottom = to_rgb565(0x16, 0x21, 0x3E);
+    draw_vertical_gradient(frame, width, height, gradient_top, gradient_bottom);
 
-    draw_background_grid(frame, width, height, background, grid);
+    const uint16_t grid_color = to_rgb565(0x0F, 0x17, 0x2A);
+    constexpr int grid_step = 32;
+    for (int y = 0; y < height; y += grid_step) {
+        fill_rect(frame, width, height, 0, y, width, 1, grid_color);
+    }
+    for (int x = 0; x < width; x += grid_step) {
+        fill_rect(frame, width, height, x, 0, 1, height, grid_color);
+    }
 
-    const int header_margin_x = 40;
-    const int header_top = 24;
-    draw_text(frame, width, height, header_margin_x, header_top, "ENVIRONMENT DASHBOARD", text_primary, 5);
-    draw_text(
-        frame,
-        width,
-        height,
-        header_margin_x,
-        header_top + 60,
-        "LIVE SENSOR DATA",
-        text_secondary,
-        3
-    );
+    const uint16_t text_primary = to_rgb565(0xF1, 0xF5, 0xF9);
+    const uint16_t text_secondary = to_rgb565(0x94, 0xA3, 0xB8);
+    const uint16_t header_accent = to_rgb565(0x60, 0xA5, 0xFA);
+    const uint16_t accent_blue = to_rgb565(0x3B, 0x82, 0xF6);
+    const uint16_t accent_cyan = to_rgb565(0x0E, 0xA5, 0xE9);
+    const uint16_t accent_green = to_rgb565(0x22, 0xC5, 0x5E);
+    const uint16_t accent_mint = to_rgb565(0x4E, 0xF8, 0xB5);
+    const uint16_t accent_amber = to_rgb565(0xF5, 0x9E, 0x0B);
+    const uint16_t card_background = to_rgb565(0x1E, 0x29, 0x3B);
 
-    const int margin = 28;
-    const int card_spacing = 18;
-    const int header_height = 120;
-    const int footer_height = 80;
-    const int cards_height = height - header_height - footer_height - margin;
+    const int margin = 36;
+    draw_text(frame, width, height, margin, margin, "FARM SUMMARY", header_accent, 6);
+    draw_text(frame, width, height, margin, margin + 60, "Live environment feed", text_secondary, 3);
+
+    const std::string badge_text = "SENSOR FEED";
+    const int badge_width = text_pixel_width(badge_text, 2, 1) + 32;
+    const int badge_x = width - margin - badge_width;
+    const int badge_y = margin + 8;
+    const uint16_t badge_color = to_rgb565(0x18, 0x2D, 0x40);
+    fill_rect(frame, width, height, badge_x, badge_y, badge_width, 34, badge_color);
+    draw_text(frame, width, height, badge_x + 16, badge_y + 6, badge_text, accent_mint, 2);
+    fill_rect(frame, width, height, badge_x + 8, badge_y + 12, 10, 10, accent_green);
+
+    const int header_bottom = margin + 110;
+    const int card_spacing = 24;
+    const int cards_top = header_bottom + 10;
     const int card_width = (width - (2 * margin) - (2 * card_spacing)) / 3;
-    if ((cards_height <= 0) || (card_width <= 0)) {
-        ESP_LOGE(TAG, "Dashboard layout collapsed (cards_height=%d card_width=%d)", cards_height, card_width);
+    const int card_height = height - cards_top - margin;
+    if ((card_width <= 0) || (card_height <= 0)) {
+        ESP_LOGE(TAG, "Dashboard layout collapsed (card_width=%d card_height=%d)", card_width, card_height);
         return ESP_ERR_INVALID_SIZE;
     }
 
-    const int cards_top = header_height;
     const int co2_display = std::max(co2_ppm, 0);
     const std::array<MetricCardData, 3> cards = {{
-        MetricCardData{"TEMPERATURE", format_float_value(temperature_c, 1), "C", to_rgb565(0xFF, 0x8A, 0x3C)},
-        MetricCardData{"HUMIDITY", format_float_value(humidity_percent, 1), "%RH", to_rgb565(0x4C, 0xD9, 0x92)},
-        MetricCardData{"CO2", format_int_value(co2_display), "PPM", to_rgb565(0x66, 0xAD, 0xFF)},
+        MetricCardData{"TEMPERATURE", format_float_value(temperature_c, 1), "C", accent_amber},
+        MetricCardData{"HUMIDITY", format_float_value(humidity_percent, 1), "%RH", accent_cyan},
+        MetricCardData{"CO2", format_int_value(co2_display), "PPM", accent_blue},
     }};
 
     for (size_t idx = 0; idx < cards.size(); ++idx) {
@@ -955,38 +984,13 @@ esp_err_t waveshare_lcd_draw_environment_dashboard(float temperature_c, float hu
             margin + static_cast<int>(idx) * (card_width + card_spacing),
             cards_top,
             card_width,
-            cards_height,
+            card_height,
         };
 
-        // simple drop shadow for depth
-        const uint16_t shadow = to_rgb565(0x07, 0x10, 0x18);
-        fill_rect(frame, width, height, card_rect.x + 6, card_rect.y + 8, card_rect.w, card_rect.h, shadow);
+        const uint16_t shadow = to_rgb565(0x06, 0x0D, 0x15);
+        fill_rect(frame, width, height, card_rect.x + 8, card_rect.y + 10, card_rect.w, card_rect.h, shadow);
         draw_metric_card(frame, width, height, card_rect, cards[idx], card_background, text_primary, text_secondary);
     }
-
-    const int footer_y = height - footer_height;
-    const uint16_t footer_bg = to_rgb565(0x0E, 0x1C, 0x2A);
-    fill_rect(frame, width, height, margin, footer_y, width - (2 * margin), footer_height - 20, footer_bg);
-    draw_text(
-        frame,
-        width,
-        height,
-        margin + 16,
-        footer_y + 16,
-        "SENSOR FEED: LIVE DATA",
-        text_primary,
-        3
-    );
-    draw_text(
-        frame,
-        width,
-        height,
-        margin + 16,
-        footer_y + 48,
-        "REPLACE WITH LIVE READINGS FROM TEMP/HUM/CO2 DRIVERS",
-        text_secondary,
-        2
-    );
 
     if (!lcd->drawBitmap(0, 0, width, height, reinterpret_cast<uint8_t *>(frame.data()), -1)) {
         ESP_LOGE(TAG, "LCD rejected dashboard frame upload");

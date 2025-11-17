@@ -16,6 +16,8 @@ constexpr uint8_t SCD40_I2C_ADDRESS = 0x62;
 constexpr TickType_t I2C_TIMEOUT_TICKS = pdMS_TO_TICKS(100);
 constexpr TickType_t MEASUREMENT_PERIOD_TICKS = pdMS_TO_TICKS(5000);
 constexpr TickType_t INITIAL_WARMUP_TICKS = pdMS_TO_TICKS(6000);
+constexpr TickType_t SENSOR_RECOVERY_PAUSE_TICKS = pdMS_TO_TICKS(500);
+constexpr TickType_t FAULT_NOTICE_MIN_INTERVAL_TICKS = pdMS_TO_TICKS(2000);
 constexpr int SCD40_TASK_STACK = 4096;
 constexpr UBaseType_t SCD40_TASK_PRIORITY = 5;
 
@@ -36,6 +38,7 @@ constexpr uint16_t DATA_READY_VALID_MASK = 0x07FF; // per Sensirion datasheet
 QueueHandle_t s_reading_queue = nullptr;
 TaskHandle_t s_task_handle = nullptr;
 bool s_sensor_started = false;
+TickType_t s_last_fault_notice_ticks = 0;
 
 uint8_t compute_crc8(const uint8_t *data, size_t len)
 {
@@ -157,6 +160,50 @@ void publish_reading(const Scd40Reading &reading)
     }
 }
 
+void publish_fault_state(const char *reason, uint32_t sample_index)
+{
+    const TickType_t now = xTaskGetTickCount();
+    if ((now - s_last_fault_notice_ticks) < FAULT_NOTICE_MIN_INTERVAL_TICKS) {
+        return;
+    }
+
+    s_last_fault_notice_ticks = now;
+
+    Scd40Reading offline{};
+    offline.valid = false;
+    offline.sample_index = sample_index;
+    offline.timestamp_ms = static_cast<uint64_t>(esp_timer_get_time() / 1000ULL);
+    publish_reading(offline);
+
+    ESP_LOGW(TAG, "SCD40 fault notice sent (%s)", reason);
+}
+
+void restart_periodic_session(const char *reason)
+{
+    ESP_LOGW(TAG, "Restarting SCD40 session (%s)", reason);
+
+    const esp_err_t stop_err = send_command(CMD_STOP_PERIODIC_MEASUREMENT);
+    if (stop_err != ESP_OK) {
+        ESP_LOGW(TAG, "Stop measurement command failed: %s", esp_err_to_name(stop_err));
+    }
+    vTaskDelay(pdMS_TO_TICKS(5));
+
+    const esp_err_t reinit_err = send_command(CMD_REINIT);
+    if (reinit_err != ESP_OK) {
+        ESP_LOGW(TAG, "Sensor reinit command failed: %s", esp_err_to_name(reinit_err));
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    const esp_err_t start_err = send_command(CMD_START_PERIODIC_MEASUREMENT);
+    if (start_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start periodic measurement after recovery: %s", esp_err_to_name(start_err));
+    } else {
+        ESP_LOGI(TAG, "SCD40 periodic measurement restarted");
+    }
+
+    vTaskDelay(INITIAL_WARMUP_TICKS + SENSOR_RECOVERY_PAUSE_TICKS);
+}
+
 void scd40_task(void *)
 {
     ESP_LOGI(TAG, "SCD40 polling task started");
@@ -181,15 +228,12 @@ void scd40_task(void *)
         const esp_err_t ready_err = wait_for_data_ready();
         if (ready_err != ESP_OK) {
             ESP_LOGW(TAG, "Data-ready poll failed: %s", esp_err_to_name(ready_err));
+            publish_fault_state("data-ready", sample_index);
             if (++consecutive_failures >= 5) {
-                ESP_LOGW(TAG, "Too many data-ready failures, sending stop/reinit/start sequence");
-                send_command(CMD_STOP_PERIODIC_MEASUREMENT);
-                vTaskDelay(pdMS_TO_TICKS(5));
-                send_command(CMD_REINIT);
-                vTaskDelay(pdMS_TO_TICKS(20));
-                send_command(CMD_START_PERIODIC_MEASUREMENT);
-                vTaskDelay(INITIAL_WARMUP_TICKS);
+                publish_fault_state("data-ready recovery", sample_index);
+                restart_periodic_session("data-ready failures");
                 consecutive_failures = 0;
+                sample_index = 0;
                 continue;
             }
             vTaskDelay(pdMS_TO_TICKS(200));
@@ -200,6 +244,7 @@ void scd40_task(void *)
         const esp_err_t read_err = read_measurement(reading);
         if (read_err == ESP_OK && reading.valid) {
             consecutive_failures = 0;
+            s_last_fault_notice_ticks = 0;
             reading.sample_index = ++sample_index;
             publish_reading(reading);
             ESP_LOGI(
@@ -212,14 +257,10 @@ void scd40_task(void *)
             );
         } else {
             ESP_LOGW(TAG, "Measurement read failed: %s", esp_err_to_name(read_err));
+            publish_fault_state("measurement", sample_index);
             if (++consecutive_failures >= 5) {
-                ESP_LOGW(TAG, "Too many measurement failures, reinitializing SCD40 session");
-                send_command(CMD_STOP_PERIODIC_MEASUREMENT);
-                vTaskDelay(pdMS_TO_TICKS(5));
-                send_command(CMD_REINIT);
-                vTaskDelay(pdMS_TO_TICKS(20));
-                send_command(CMD_START_PERIODIC_MEASUREMENT);
-                vTaskDelay(INITIAL_WARMUP_TICKS);
+                publish_fault_state("measurement recovery", sample_index);
+                restart_periodic_session("measurement failures");
                 consecutive_failures = 0;
                 sample_index = 0;
             }
